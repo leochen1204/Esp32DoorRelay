@@ -1,22 +1,104 @@
-	<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
     <title>204 鐵捲門控制</title>
+
     <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
-    
+
     <style>
-        body { font-family: -apple-system, system-ui; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #f2f2f7; }
-        .card { background: white; padding: 30px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); width: 85%; max-width: 350px; text-align: center; }
-        .btn { width: 100%; padding: 20px; margin: 10px 0; font-size: 20px; border: none; border-radius: 15px; cursor: pointer; color: white; font-weight: bold; transition: transform 0.1s; }
-        .btn:active { transform: scale(0.95); }
-        #up { background: #34c759; } #stop { background: #ff3b30; } #down { background: #007aff; }
-        #auth-screen { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #f2f2f7; z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-        .lock-icon { font-size: 60px; margin-bottom: 20px; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            background: #f2f2f7;
+        }
+
+        .card {
+            background: white;
+            padding: 30px;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            width: 85%;
+            max-width: 350px;
+            text-align: center;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 20px;
+            margin: 10px 0;
+            font-size: 20px;
+            border: none;
+            border-radius: 15px;
+            cursor: pointer;
+            color: white;
+            font-weight: bold;
+            transition: transform 0.1s, opacity 0.2s;
+        }
+
+        .btn:active {
+            transform: scale(0.95);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        #up {
+            background: #34c759;
+        }
+
+        #stop {
+            background: #ff3b30;
+        }
+
+        #down {
+            background: #007aff;
+        }
+
+        #auth-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #f2f2f7;
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .lock-icon {
+            font-size: 60px;
+            margin-bottom: 20px;
+        }
+
+        #status {
+            color: #888;
+            font-size: 13px;
+            margin-top: 15px;
+            line-height: 1.5;
+        }
+
+        #lastTime {
+            color: #555;
+            font-size: 12px;
+            margin-top: 8px;
+        }
     </style>
 </head>
+
 <body>
 
 <div id="auth-screen">
@@ -27,23 +109,34 @@
 </div>
 
 <div class="card">
-    <h2>鐵捲門控制</h2>
-    <button id="up" class="btn" onclick="trigger(1)">⇧ 捲門上升</button>
-    <button id="stop" class="btn" onclick="trigger(2)">■ 停止動作</button>
-    <button id="down" class="btn" onclick="trigger(3)">⇩ 捲門下降</button>
-    <p id="status" style="color: #888; font-size: 12px; margin-top: 15px;">等待驗證...</p>
+    <h2>204 鐵捲門控制</h2>
+
+    <button id="up" class="btn" onclick="triggerDoor('OPEN')">⇧ 捲門上升</button>
+    <button id="stop" class="btn" onclick="triggerDoor('STOP')">■ 停止動作</button>
+    <button id="down" class="btn" onclick="triggerDoor('CLOSE')">⇩ 捲門下降</button>
+
+    <p id="status">等待驗證...</p>
+    <p id="lastTime">尚未送出指令</p>
 </div>
 
 <script>
-    // 1. Firebase 配置 (沿用你的設定)
+    // ======================================================
+    // Firebase 設定
+    // ======================================================
     const firebaseConfig = {
         apiKey: "AIzaSyCjdDG7XRhJhRjhbFbrLkrW8-yDMc9vFKs",
         databaseURL: "https://esp32-autohome204-default-rtdb.asia-southeast1.firebasedatabase.app/"
     };
+
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
-    // 2. Face ID / 生物辨識核心邏輯
+    let unlocked = false;
+    let busy = false;
+
+    // ======================================================
+    // Face ID / 生物辨識
+    // ======================================================
     async function authenticate() {
         if (!window.PublicKeyCredential) {
             alert("此設備不支援生物辨識，將直接進入控制模式");
@@ -52,27 +145,44 @@
         }
 
         try {
-            // 這裡模擬一個 WebAuthn 請求來喚醒 iOS 原生驗證視窗
             const challenge = new Uint8Array(32);
             window.crypto.getRandomValues(challenge);
+
             const userId = new Uint8Array(16);
             window.crypto.getRandomValues(userId);
 
             const options = {
                 publicKey: {
                     challenge: challenge,
-                    rp: { name: "Home204 Control", id: window.location.hostname },
-                    user: { id: userId, name: "owner", displayName: "屋主" },
-                    pubKeyCredParams: [{ alg: -7, type: "public-key" }],
-                    authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
+                    rp: {
+                        name: "Home204 Control",
+                        id: window.location.hostname
+                    },
+                    user: {
+                        id: userId,
+                        name: "owner",
+                        displayName: "屋主"
+                    },
+                    pubKeyCredParams: [
+                        {
+                            alg: -7,
+                            type: "public-key"
+                        }
+                    ],
+                    authenticatorSelection: {
+                        authenticatorAttachment: "platform",
+                        userVerification: "required"
+                    },
                     timeout: 60000
                 }
             };
 
             const credential = await navigator.credentials.create(options);
+
             if (credential) {
                 unlock();
             }
+
         } catch (err) {
             console.error(err);
             alert("驗證取消或失敗：" + err.message);
@@ -80,26 +190,86 @@
     }
 
     function unlock() {
-        document.getElementById('auth-screen').style.display = 'none';
-        document.getElementById('status').innerText = "系統就緒";
+        unlocked = true;
+        document.getElementById("auth-screen").style.display = "none";
+        document.getElementById("status").innerText = "系統就緒";
     }
 
-    // 3. 觸發繼電器
-    function trigger(num) {
-        const now = Date.now();
-        const btns = document.querySelectorAll('.btn');
-        btns.forEach(b => b.disabled = true);
-        
-        db.ref('/triggerRelay' + num).set(now)
-            .then(() => {
-                document.getElementById('status').innerText = "動作執行中...";
-                setTimeout(() => {
-                    btns.forEach(b => b.disabled = false);
-                    document.getElementById('status').innerText = "系統就緒";
-                }, 1500);
-            })
-            .catch(err => alert("連線錯誤: " + err));
+    // ======================================================
+    // 按鈕鎖定 / 解鎖
+    // ======================================================
+    function setButtonsDisabled(disabled) {
+        document.getElementById("up").disabled = disabled;
+        document.getElementById("stop").disabled = disabled;
+        document.getElementById("down").disabled = disabled;
+    }
+
+    // ======================================================
+    // 指令名稱轉中文
+    // ======================================================
+    function commandText(cmd) {
+        if (cmd === "OPEN") return "捲門上升";
+        if (cmd === "STOP") return "停止動作";
+        if (cmd === "CLOSE") return "捲門下降";
+        return "未知指令";
+    }
+
+    // ======================================================
+    // 觸發鐵捲門
+    //
+    // Firebase 寫入格式：
+    // /doorCommand
+    // {
+    //   cmd: "OPEN",
+    //   ts: 1716369005123
+    // }
+    //
+    // ts 使用 Date.now()，是毫秒 timestamp
+    // ESP32 會用 ts 判斷是不是新指令
+    // ======================================================
+    function triggerDoor(cmd) {
+        if (!unlocked) {
+            alert("請先完成解鎖");
+            return;
+        }
+
+        if (busy) {
+            return;
+        }
+
+        busy = true;
+        setButtonsDisabled(true);
+
+        const ts = Date.now();
+        const timeText = new Date(ts).toLocaleString("zh-TW", {
+            hour12: false
+        });
+
+        document.getElementById("status").innerText = "送出指令中：" + commandText(cmd);
+
+        db.ref("/doorCommand").set({
+            cmd: cmd,
+            ts: ts
+        })
+        .then(() => {
+            document.getElementById("status").innerText = "已送出：" + commandText(cmd);
+            document.getElementById("lastTime").innerText = "觸發時間：" + timeText + "，ts=" + ts;
+
+            setTimeout(() => {
+                busy = false;
+                setButtonsDisabled(false);
+                document.getElementById("status").innerText = "系統就緒";
+            }, 1500);
+        })
+        .catch((err) => {
+            console.error(err);
+            busy = false;
+            setButtonsDisabled(false);
+            document.getElementById("status").innerText = "送出失敗";
+            alert("Firebase 連線錯誤：" + err.message);
+        });
     }
 </script>
+
 </body>
 </html>
